@@ -1,124 +1,163 @@
-const {
-  time,
-  loadFixture,
-} = require("@nomicfoundation/hardhat-toolbox/network-helpers");
-const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
 const { expect } = require("chai");
+const { ethers } = require("hardhat");
 
-describe("Lock", function () {
-   
-  async function deployOneYearLockFixture() {
-    const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
-    const ONE_GWEI = 1_000_000_000;
+describe("PayAsYouGoElectricity", function () {
+  let payAsYouGo;
+  let owner, user, meter, nonOwner;
 
-    const lockedAmount = ONE_GWEI;
-    const unlockTime = (await time.latest()) + ONE_YEAR_IN_SECS;
+  beforeEach(async function () {
+    // Get the contract factory and signers
+    const PayAsYouGoElectricity = await ethers.getContractFactory("PayAsYouGoElectricity");
+    [owner, user, meter, nonOwner] = await ethers.getSigners();
 
-    // Contracts are deployed using the first signer/account by default
-    const [owner, otherAccount] = await ethers.getSigners();
-
-    const Lock = await ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
-
-    return { lock, unlockTime, lockedAmount, owner, otherAccount };
-  }
+    // Deploy the contract
+    payAsYouGo = await PayAsYouGoElectricity.deploy();
+  });
 
   describe("Deployment", function () {
-    it("Should set the right unlockTime", async function () {
-      const { lock, unlockTime } = await loadFixture(deployOneYearLockFixture);
-
-      expect(await lock.unlockTime()).to.equal(unlockTime);
-    });
-
     it("Should set the right owner", async function () {
-      const { lock, owner } = await loadFixture(deployOneYearLockFixture);
+      expect(await payAsYouGo.owner()).to.equal(owner);
+    });
+  });
 
-      expect(await lock.owner()).to.equal(owner.address);
+  describe("User Registration", function () {
+    it("Should allow the owner to register a user", async function () {
+      await payAsYouGo.connect(owner).registerUser(user);
+      const userInfo = await payAsYouGo.users(user);
+      expect(userInfo.isRegistered).to.be.true;
     });
 
-    it("Should receive and store the funds to lock", async function () {
-      const { lock, lockedAmount } = await loadFixture(
-        deployOneYearLockFixture
-      );
-
-      expect(await ethers.provider.getBalance(lock.target)).to.equal(
-        lockedAmount
+    it("Should revert if a user is already registered", async function () {
+      await payAsYouGo.connect(owner).registerUser(user.address);
+      await expect(payAsYouGo.connect(owner).registerUser(user.address)).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "AlreadyRegistered"
       );
     });
 
-    it("Should fail if the unlockTime is not in the future", async function () {
-      // We don't use the fixture here because we want a different deployment
-      const latestTime = await time.latest();
-      const Lock = await ethers.getContractFactory("Lock");
-      await expect(Lock.deploy(latestTime, { value: 1 })).to.be.revertedWith(
-        "Unlock time should be in the future"
+    it("Should not allow non-owner to register users", async function () {
+      await expect(payAsYouGo.connect(nonOwner).registerUser(user.address)).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "Unauthorized"
       );
     });
   });
 
-  describe("Withdrawals", function () {
-    describe("Validations", function () {
-      it("Should revert with the right error if called too soon", async function () {
-        const { lock } = await loadFixture(deployOneYearLockFixture);
-
-        await expect(lock.withdraw()).to.be.revertedWith(
-          "You can't withdraw yet"
-        );
-      });
-
-      it("Should revert with the right error if called from another account", async function () {
-        const { lock, unlockTime, otherAccount } = await loadFixture(
-          deployOneYearLockFixture
-        );
-
-        // We can increase the time in Hardhat Network
-        await time.increaseTo(unlockTime);
-
-        // We use lock.connect() to send a transaction from another account
-        await expect(lock.connect(otherAccount).withdraw()).to.be.revertedWith(
-          "You aren't the owner"
-        );
-      });
-
-      it("Shouldn't fail if the unlockTime has arrived and the owner calls it", async function () {
-        const { lock, unlockTime } = await loadFixture(
-          deployOneYearLockFixture
-        );
-
-        // Transactions are sent using the first signer by default
-        await time.increaseTo(unlockTime);
-
-        await expect(lock.withdraw()).not.to.be.reverted;
-      });
+  describe("Meter Registration", function () {
+    it("Should allow the owner to register a meter", async function () {
+      await payAsYouGo.connect(owner).registerMeter(meter.address);
+      const isMeterRegistered = await payAsYouGo.registeredMeters(meter.address);
+      expect(isMeterRegistered).to.be.true;
     });
 
-    describe("Events", function () {
-      it("Should emit an event on withdrawals", async function () {
-        const { lock, unlockTime, lockedAmount } = await loadFixture(
-          deployOneYearLockFixture
-        );
-
-        await time.increaseTo(unlockTime);
-
-        await expect(lock.withdraw())
-          .to.emit(lock, "Withdrawal")
-          .withArgs(lockedAmount, anyValue); // We accept any value as `when` arg
-      });
+    it("Should revert if a meter is already registered", async function () {
+      await payAsYouGo.connect(owner).registerMeter(meter.address);
+      await expect(payAsYouGo.connect(owner).registerMeter(meter.address)).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "AlreadyRegistered"
+      );
     });
 
-    describe("Transfers", function () {
-      it("Should transfer the funds to the owner", async function () {
-        const { lock, unlockTime, lockedAmount, owner } = await loadFixture(
-          deployOneYearLockFixture
-        );
+    it("Should not allow non-owner to register meters", async function () {
+      await expect(payAsYouGo.connect(nonOwner).registerMeter(meter.address)).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "Unauthorized"
+      );
+    });
+  });
 
-        await time.increaseTo(unlockTime);
+  describe("Top-Up", function () {
+    beforeEach(async function () {
+      await payAsYouGo.connect(owner).registerUser(user.address);
+    });
 
-        await expect(lock.withdraw()).to.changeEtherBalances(
-          [owner, lock],
-          [lockedAmount, -lockedAmount]
-        );
-      });
+    it("Should allow a registered user to top up electricity credits", async function () {
+      const topUpAmount = ethers.parseEther("1.0");
+      await expect(payAsYouGo.connect(user).topUp({ value: topUpAmount }))
+        .to.emit(payAsYouGo, "TopUp")
+        .withArgs(user.address, topUpAmount);
+      const userInfo = await payAsYouGo.users(user.address);
+      expect(userInfo.balance).to.equal(topUpAmount);
+    });
+
+    it("Should revert if top-up amount is zero", async function () {
+      await expect(payAsYouGo.connect(user).topUp({ value: 0 })).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "InvalidAmount"
+      );
+    });
+
+    it("Should revert if an unregistered user tries to top up", async function () {
+      await expect(payAsYouGo.connect(nonOwner).topUp({ value: ethers.parseEther("1.0") })).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "Unauthorized"
+      );
+    });
+  });
+
+  describe("Use Electricity", function () {
+    beforeEach(async function () {
+      await payAsYouGo.connect(owner).registerUser(user.address);
+      await payAsYouGo.connect(owner).registerMeter(meter.address);
+      await payAsYouGo.connect(user).topUp({ value: ethers.parseEther("1.0") });
+    });
+
+    it("Should allow a registered meter to deduct user's electricity credits", async function () {
+      const deductAmount = ethers.parseEther("0.5");
+      await expect(payAsYouGo.connect(meter).useElectricity(user.address, deductAmount))
+        .to.emit(payAsYouGo, "ElectricityUsed")
+        .withArgs(user.address, deductAmount);
+      const userInfo = await payAsYouGo.users(user.address);
+      expect(userInfo.balance).to.equal(ethers.parseEther("0.5"));
+    });
+
+    it("Should revert if the user's balance is insufficient", async function () {
+      const deductAmount = ethers.parseEther("2.0");
+      await expect(payAsYouGo.connect(meter).useElectricity(user.address, deductAmount)).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "InsufficientBalance"
+      );
+    });
+
+    it("Should revert if an unregistered meter tries to use electricity", async function () {
+      await expect(payAsYouGo.connect(nonOwner).useElectricity(user.address, ethers.parseEther("0.5"))).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "MeterNotRegistered"
+      );
+    });
+  });
+
+  describe("Withdraw", function () {
+    beforeEach(async function () {
+      await payAsYouGo.connect(owner).registerUser(user.address);
+      await payAsYouGo.connect(user).topUp({ value: ethers.parseEther("1.0") });
+    });
+
+    it("Should allow the owner to withdraw funds", async function () {
+      const ownerBalanceBefore = await ethers.provider.getBalance(owner);
+    
+      const tx = await payAsYouGo.connect(owner).withdraw();
+      const receipt = await tx.wait();
+    
+      // Convert gasUsed to BigNumber
+      const gasUsed = ethers.BigNumber.from(receipt.gasUsed);
+      const effectiveGasPrice = ethers.BigNumber.from(receipt.effectiveGasPrice);
+      const totalGasCost = gasUsed.mul(effectiveGasPrice);
+    
+      const contractBalance = await ethers.provider.getBalance(payAsYouGo.address);
+    
+      const ownerBalanceAfter = await ethers.provider.getBalance(owner.address);
+    
+      // Check that the owner's balance increased by the contract's balance minus the gas cost
+      expect(ownerBalanceAfter).to.equal(ownerBalanceBefore.add(contractBalance).sub(totalGasCost));
+    });
+    
+
+    it("Should revert if a non-owner tries to withdraw", async function () {
+      await expect(payAsYouGo.connect(nonOwner).withdraw()).to.be.revertedWithCustomError(
+        payAsYouGo,
+        "Unauthorized"
+      );
     });
   });
 });
