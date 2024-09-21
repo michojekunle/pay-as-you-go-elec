@@ -50,6 +50,8 @@ sol! {
     event AlreadyRegistered(string message);
     event InvalidAmount(uint256 amount);
     event AnotherLog();
+    event Unauthorized();
+    event MeterNotRegistered();
 }
 
 // // Represents the ways methods may fail.
@@ -175,63 +177,63 @@ impl PayAsYouGoElectricity {
         self.only_registered_meter(meter);
 
         let mut user_data = self.users.get(user);
-        if user_data.balance < amount {
+        if user_data.balance.get() < amount {
             evm::log(InvalidAmount { amount: amount });
             return;
         }
 
-        user_data.balance -= amount;
-        self.users.set(user, user_data);
+        let current_balance = user_data.balance.get();
+        self.users.setter(meter).balance.set(current_balance - amount);
 
-        stylus_sdk::emit_event::<ElectricityUsed>(ElectricityUsed {
-            user,
-            amount,
+        evm::log(Log {
+            sender: meter,
+            message: "Electricity Usage SUccessful".to_string(),
         });
     }
 
     /// Withdraws contract funds by the owner.
-    pub fn withdraw(&mut self) {
-        self.only_owner();
+    // pub fn withdraw(&mut self) {
+    //     self.only_owner();
 
-        let balance = stylus_sdk::msg::balance();
-        let success = stylus_sdk::msg::transfer(self.owner.get(), balance);
-        if !success {
-            stylus_sdk::revert_with("WithdrawFailed");
-        }
-    }
+    //     let balance = stylus_sdk::msg::balance();
+    //     let success = stylus_sdk::msg::transfer(self.owner.get(), balance);
+    //     if !success {
+    //         stylus_sdk::revert_with("WithdrawFailed");
+    //     }
+    // }
 
     /// Internal function to check if the caller is the owner.
     fn only_owner(&self) {
         if stylus_sdk::msg::sender() != self.owner.get() {
-            stylus_sdk::revert_with("Unauthorized");
+            evm::log(Unauthorized{} );
         }
     }
 
     /// Internal function to check if the caller is a registered user.
     fn only_registered_user(&self, user: Address) {
         let user_data = self.users.get(user);
-        if !user_data.is_registered {
-            stylus_sdk::revert_with("Unauthorized");
+        if !user_data.is_registered.get() {
+            evm::log(Unauthorized{});
         }
     }
 
     /// Internal function to check if the caller is a registered IoT meter.
     fn only_registered_meter(&self, meter: Address) {
         if !self.registered_meters.get(meter) {
-            stylus_sdk::revert_with("MeterNotRegistered");
+            evm::log(MeterNotRegistered{});
         }
     }
 }
 
 // Define custom events
-#[derive(Encode, Decode)]
-pub struct TopUp {
-    user: Address,
-    amount: U256,
-}
+// #[derive(Encode)]
+// pub struct TopUp {
+//     user: Address,
+//     amount: U256,
+// }
 
-#[derive(Encode, Decode)]
-pub struct ElectricityUsed {
-    user: Address,
-    amount: U256,
-}
+// #[derive(Encode, Decode)]
+// pub struct ElectricityUsed {
+//     user: Address,
+//     amount: U256,
+// }
