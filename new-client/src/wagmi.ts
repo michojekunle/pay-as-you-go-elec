@@ -1,17 +1,13 @@
 import { getDefaultConfig } from '@rainbow-me/rainbowkit';
 import {
-  sepolia,
-  lisk,
-  liskSepolia,
+  arbitrumSepolia,
 } from 'wagmi/chains';
 
 export const config = getDefaultConfig({
   appName: 'RainbowKit App',
-  projectId: '6182781540ebbc64154071bf4e7b4518',
+  projectId: 'c59e86f04bdb6a22343b9337956b2368',
   chains: [
-    sepolia,
-    lisk,
-    liskSepolia,
+    arbitrumSepolia,
   ],
   ssr: true,
 });
